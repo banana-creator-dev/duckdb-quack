@@ -97,6 +97,18 @@ QuackTableSet::QuackTableSet(QuackSchemaCatalogEntry &parent)
     : QuackCatalogSet(parent.ParentCatalog().Cast<QuackCatalog>()), schema(parent) {
 }
 
+string QuackTableSet::GetTempLoadQuery() {
+	return R"(
+SELECT schema_oid, sql, 'table'
+FROM duckdb_tables()
+WHERE database_name = 'temp'
+UNION ALL
+SELECT schema_oid, view_name, 'view'
+FROM duckdb_views()
+WHERE database_name = 'temp'
+	)";
+}
+
 string QuackTableSet::GetLoadQuery() {
 	// the schema is identified by its oid - the name alone is ambiguous once schemas can be nested or live in
 	// different catalogs on the server

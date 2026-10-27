@@ -8,6 +8,7 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/sql_statement.hpp"
+#include "duckdb/parser/statement/create_statement.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -157,7 +158,10 @@ optional_ptr<SchemaCatalogEntry> QuackCatalog::LookupSchema(CatalogTransaction t
 	}
 	auto schema_path = GetSchemaPath(schema_lookup);
 	// navigate the schema chain: the outermost schema lives in the catalog, each nested one in its parent
-	reference<QuackCatalogSet> current_set = GetSchemas(transaction.GetContext());
+	// temp.main: the server's temp catalog; a lone temp is a schema of that name in its default catalog
+	auto in_temp = schema_path.size() > 1 && StringUtil::CIEquals(schema_path[0].GetIdentifierName(), TEMP_CATALOG);
+	reference<QuackCatalogSet> current_set =
+	    in_temp ? GetTempSchemas(transaction.GetContext()) : GetSchemas(transaction.GetContext());
 	optional_ptr<CatalogEntry> entry;
 	for (idx_t i = 0; i < schema_path.size(); i++) {
 		entry = current_set.get().GetEntry(schema_path[i].GetIdentifierName());
@@ -237,6 +241,7 @@ shared_ptr<QuackClientConnection> QuackCatalog::GetClientConnection(ClientContex
 
 void QuackCatalog::Refresh(ClientContext &context) {
 	Invalidate();
+	ForgetTemp(context);
 	auto &transaction = QuackTransaction::Get(context, *this);
 	if (transaction.CatalogChanged()) {
 		transaction.MarkCatalogChanged();
@@ -251,6 +256,30 @@ void QuackCatalog::Invalidate() {
 
 void QuackCatalog::Invalidate(ClientContext &context) {
 	QuackTransaction::Get(context, *this).MarkCatalogChanged();
+	ForgetTemp(context);
+}
+
+void QuackCatalog::ForgetTemp(ClientContext &context) {
+	if (auto connection = connections->Find(context)) {
+		connection->SetTempSchemas(nullptr);
+	}
+}
+
+QuackSchemaSet &QuackCatalog::GetTempSchemas(ClientContext &context) {
+	// another connection's session has a temp catalog of its own, so a shared snapshot would show its tables
+	// to sessions that cannot read them
+	auto connection = GetClientConnection(context);
+	auto temp = connection->TempSchemas();
+	if (!temp) {
+		QuackLoadCatalogData load_data;
+		load_data.schemas = ExecuteCommandInternal(context, QuackSchemaSet::GetTempLoadQuery());
+		load_data.tables = ExecuteCommandInternal(context, QuackTableSet::GetTempLoadQuery());
+		temp = make_shared_ptr<QuackSchemaSet>(context, *this, load_data);
+		connection->SetTempSchemas(temp);
+	}
+	auto &result = *temp;
+	QuackTransaction::Get(context, *this).Retain(std::move(temp));
+	return result;
 }
 
 void QuackCatalog::InvalidateIfChangedSince(idx_t version) {
@@ -365,7 +394,7 @@ optional_ptr<CatalogEntry> QuackCatalog::CreateSchema(CatalogTransaction transac
 	remote_info->StripCatalogQualification();
 	auto &quack_transaction = QuackTransaction::Get(transaction);
 	quack_transaction.Query(remote_info->ToString());
-	quack_transaction.MarkCatalogChanged();
+	Invalidate(transaction.GetContext());
 
 	auto existing = target_set.get().GetEntry(info.SchemaName().GetIdentifierName());
 	if (existing && info.on_conflict != OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -416,6 +445,15 @@ unique_ptr<TableRef> QuackCatalog::RemoteExecute(ClientContext &context, unique_
 unique_ptr<TableRef> QuackCatalog::RemoteExecute(ClientContext &context, unique_ptr<SQLStatement> statement) {
 	// a statement pushed down as a whole is DDL - it changes the catalog on the server, so the local
 	// snapshot of the remote catalog has to be reloaded once the statement has run
+	if (statement->type == StatementType::CREATE_STATEMENT) {
+		auto &info = *statement->Cast<CreateStatement>().info;
+		auto &path = info.GetQualifiedName().Path();
+		// the server takes a table or view in its temp catalog only as a TEMP one
+		if ((info.type == CatalogType::TABLE_ENTRY || info.type == CatalogType::VIEW_ENTRY) && path.size() > 2 &&
+		    StringUtil::CIEquals(path[0].GetIdentifierName(), TEMP_CATALOG)) {
+			info.temporary = true;
+		}
+	}
 	return CreateRemoteQueryRef(statement->ToString(), true);
 }
 
