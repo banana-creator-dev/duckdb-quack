@@ -87,7 +87,8 @@ WITH RECURSIVE schema_tree AS (
 )
 SELECT oid, database_name, schema_path, current_database()
 FROM schema_tree
-WHERE )" + filter + R"(
+WHERE )" + filter +
+	       R"(
 ORDER BY (database_name = current_database()) DESC, database_name, length(schema_path), schema_path
 	)";
 }
