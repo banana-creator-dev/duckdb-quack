@@ -19,6 +19,7 @@ namespace duckdb {
 class QuackCatalog;
 class QuackClient;
 class QuackClientConnection;
+class QuackConnectionRegistry;
 
 class QuackCatalog : public Catalog {
 public:
@@ -78,9 +79,12 @@ public:
 
 	unique_ptr<ColumnDataCollection> ExecuteCommandInternal(ClientContext &context, const string &query);
 	const QuackUri &GetServerUri();
-	const string &GetConnectionId();
+	//! The id of the server connection "context" talks over
+	string GetConnectionId(ClientContext &context);
 
-	shared_ptr<QuackClientConnection> GetClientConnection();
+	//! The server connection of "context". Each client context gets its own: the server runs one statement per
+	//! connection, so contexts sharing one would cancel each other's queries
+	shared_ptr<QuackClientConnection> GetClientConnection(ClientContext &context);
 
 	void Refresh(ClientContext &context);
 	void Invalidate();
@@ -100,7 +104,13 @@ private:
 	bool ServesOwnConnection(ClientContext &context);
 
 private:
+	QuackUri server_uri;
+	string token;
+	string client_id;
+	idx_t heartbeat_timeout_seconds;
+	//! The connection opened by ATTACH
 	shared_ptr<QuackClientConnection> client_connection;
+	shared_ptr<QuackConnectionRegistry> connections;
 	mutex snapshot_lock;
 	std::condition_variable snapshot_loaded;
 	shared_ptr<QuackSchemaSet> snapshot;
