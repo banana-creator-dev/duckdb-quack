@@ -19,6 +19,7 @@ namespace duckdb {
 class QuackCatalog;
 class QuackClient;
 class QuackClientConnection;
+class QuackTransaction;
 class QuackConnectionRegistry;
 
 class QuackCatalog : public Catalog {
@@ -87,7 +88,10 @@ public:
 	shared_ptr<QuackClientConnection> GetClientConnection(ClientContext &context);
 
 	void Refresh(ClientContext &context);
+	//! The remote catalog changed outside any transaction of ours (or we cannot tell): reload for everyone
 	void Invalidate();
+	//! The remote catalog changed inside this context's transaction: only that transaction reloads now
+	void Invalidate(ClientContext &context);
 	void InvalidateIfChangedSince(idx_t version);
 	idx_t InvalidatedVersion();
 
@@ -100,7 +104,7 @@ private:
 
 	QuackLoadCatalogData LoadCatalog(ClientContext &context);
 	QuackSchemaSet &GetSchemas(ClientContext &context);
-	shared_ptr<QuackSchemaSet> AcquireSnapshot(ClientContext &context);
+	shared_ptr<QuackSchemaSet> AcquireSnapshot(ClientContext &context, QuackTransaction &transaction);
 	bool ServesOwnConnection(ClientContext &context);
 
 private:
