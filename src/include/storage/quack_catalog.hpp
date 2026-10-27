@@ -92,6 +92,8 @@ public:
 	void Invalidate();
 	//! The remote catalog changed inside this context's transaction: only that transaction reloads now
 	void Invalidate(ClientContext &context);
+	//! This context's server session may have changed its temp catalog
+	void ForgetTemp(ClientContext &context);
 	void InvalidateIfChangedSince(idx_t version);
 	idx_t InvalidatedVersion();
 
@@ -104,6 +106,7 @@ private:
 
 	QuackLoadCatalogData LoadCatalog(ClientContext &context);
 	QuackSchemaSet &GetSchemas(ClientContext &context);
+	QuackSchemaSet &GetTempSchemas(ClientContext &context);
 	shared_ptr<QuackSchemaSet> AcquireSnapshot(ClientContext &context, QuackTransaction &transaction);
 	bool ServesOwnConnection(ClientContext &context);
 
