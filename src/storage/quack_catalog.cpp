@@ -237,12 +237,20 @@ shared_ptr<QuackClientConnection> QuackCatalog::GetClientConnection(ClientContex
 
 void QuackCatalog::Refresh(ClientContext &context) {
 	Invalidate();
+	auto &transaction = QuackTransaction::Get(context, *this);
+	if (transaction.CatalogChanged()) {
+		transaction.MarkCatalogChanged();
+	}
 	GetSchemas(context);
 }
 
 void QuackCatalog::Invalidate() {
 	lock_guard<mutex> guard(snapshot_lock);
 	invalidated_version++;
+}
+
+void QuackCatalog::Invalidate(ClientContext &context) {
+	QuackTransaction::Get(context, *this).MarkCatalogChanged();
 }
 
 void QuackCatalog::InvalidateIfChangedSince(idx_t version) {
@@ -263,13 +271,26 @@ bool QuackCatalog::ServesOwnConnection(ClientContext &context) {
 }
 
 QuackSchemaSet &QuackCatalog::GetSchemas(ClientContext &context) {
-	auto current = AcquireSnapshot(context);
+	auto &transaction = QuackTransaction::Get(context, *this);
+	auto current = AcquireSnapshot(context, transaction);
 	auto &result = *current;
-	QuackTransaction::Get(context, *this).Retain(std::move(current));
+	transaction.Retain(std::move(current));
 	return result;
 }
 
-shared_ptr<QuackSchemaSet> QuackCatalog::AcquireSnapshot(ClientContext &context) {
+shared_ptr<QuackSchemaSet> QuackCatalog::AcquireSnapshot(ClientContext &context, QuackTransaction &transaction) {
+	if (transaction.CatalogChanged()) {
+		// what this transaction created or dropped is visible only to its own server transaction - loading it
+		// into the shared snapshot would hand it to every other connection, and another connection's reload
+		// would take it away from this one
+		auto own = transaction.OwnSnapshot();
+		if (!own) {
+			auto load_data = LoadCatalog(context);
+			own = make_shared_ptr<QuackSchemaSet>(context, *this, load_data);
+			transaction.SetOwnSnapshot(own);
+		}
+		return own;
+	}
 	auto uses_published = ServesOwnConnection(context);
 	unique_lock<mutex> guard(snapshot_lock);
 	while (loaded_version != invalidated_version && !uses_published && loading_context.get() != &context) {
@@ -344,7 +365,7 @@ optional_ptr<CatalogEntry> QuackCatalog::CreateSchema(CatalogTransaction transac
 	remote_info->StripCatalogQualification();
 	auto &quack_transaction = QuackTransaction::Get(transaction);
 	quack_transaction.Query(remote_info->ToString());
-	Invalidate();
+	quack_transaction.MarkCatalogChanged();
 
 	auto existing = target_set.get().GetEntry(info.SchemaName().GetIdentifierName());
 	if (existing && info.on_conflict != OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -442,7 +463,7 @@ void QuackCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	drop_info->SetQualifiedName(remote_name);
 	auto &transaction = QuackTransaction::Get(context, *this);
 	transaction.Query(drop_info->ToString());
-	Invalidate();
+	Invalidate(context);
 }
 
 bool QuackCatalog::SupportsPushdown(const TableRef &ref) {
