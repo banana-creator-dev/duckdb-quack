@@ -149,6 +149,7 @@ static unique_ptr<FunctionData> QuackScanBindCatalogName(ClientContext &context,
 			catalog.Invalidate(context);
 		} else {
 			catalog.Invalidate();
+			catalog.ForgetTemp(context);
 		}
 	}
 	return bind_data;
