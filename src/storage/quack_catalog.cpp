@@ -156,23 +156,29 @@ optional_ptr<SchemaCatalogEntry> QuackCatalog::LookupSchema(CatalogTransaction t
 	if (!transaction.HasContext()) {
 		throw InternalException("Quack catalog lookups require a client context");
 	}
+	auto &context = transaction.GetContext();
 	auto schema_path = GetSchemaPath(schema_lookup);
+	auto schema = FindSchema(context, schema_path);
+	if (!schema && !schema_path.empty() && ReloadOnMiss(context)) {
+		schema = FindSchema(context, schema_path);
+	}
+	if (!schema && !schema_path.empty() && if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
+		throw BinderException("Schema with name \"%s\" not found", schema_path.back().GetIdentifierName());
+	}
+	return schema;
+}
+
+optional_ptr<SchemaCatalogEntry> QuackCatalog::FindSchema(ClientContext &context,
+                                                          const vector<Identifier> &schema_path) {
 	// navigate the schema chain: the outermost schema lives in the catalog, each nested one in its parent
 	// temp.main: the server's temp catalog; a lone temp is a schema of that name in its default catalog
 	auto in_temp = schema_path.size() > 1 && StringUtil::CIEquals(schema_path[0].GetIdentifierName(), TEMP_CATALOG);
-	reference<QuackCatalogSet> current_set =
-	    in_temp ? GetTempSchemas(transaction.GetContext()) : GetSchemas(transaction.GetContext());
+	reference<QuackCatalogSet> current_set = in_temp ? GetTempSchemas(context) : GetSchemas(context);
 	optional_ptr<CatalogEntry> entry;
 	for (idx_t i = 0; i < schema_path.size(); i++) {
 		entry = current_set.get().GetEntry(schema_path[i].GetIdentifierName());
 		if (!entry) {
-			switch (if_not_found) {
-			case OnEntryNotFound::THROW_EXCEPTION:
-				throw BinderException("Schema with name \"%s\" not found", schema_path[i].GetIdentifierName());
-			case OnEntryNotFound::RETURN_NULL:
-			default:
-				return nullptr;
-			}
+			return nullptr;
 		}
 		current_set = entry->Cast<QuackSchemaCatalogEntry>().Schemas();
 	}
@@ -180,6 +186,21 @@ optional_ptr<SchemaCatalogEntry> QuackCatalog::LookupSchema(CatalogTransaction t
 		return nullptr;
 	}
 	return entry->Cast<SchemaCatalogEntry>();
+}
+
+bool QuackCatalog::ReloadOnMiss(ClientContext &context) {
+	auto &transaction = QuackTransaction::Get(context, *this);
+	if (!transaction.TakeMissReload()) {
+		return false;
+	}
+	if (transaction.CatalogChanged()) {
+		// this transaction reads its own snapshot: drop it, so the next lookup loads it again
+		transaction.MarkCatalogChanged();
+	} else {
+		Invalidate();
+	}
+	ForgetTemp(context);
+	return true;
 }
 
 const QuackUri &QuackCatalog::GetServerUri() {

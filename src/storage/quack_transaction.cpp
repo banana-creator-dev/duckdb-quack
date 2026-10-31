@@ -70,6 +70,15 @@ void QuackTransaction::SetOwnSnapshot(shared_ptr<QuackSchemaSet> snapshot) {
 	own_snapshot = std::move(snapshot);
 }
 
+bool QuackTransaction::TakeMissReload() {
+	lock_guard<mutex> guard(retained_lock);
+	if (reloaded_on_miss) {
+		return false;
+	}
+	reloaded_on_miss = true;
+	return true;
+}
+
 QuackTransaction &QuackTransaction::Get(ClientContext &context, Catalog &catalog) {
 	return Transaction::Get(context, catalog).Cast<QuackTransaction>();
 }

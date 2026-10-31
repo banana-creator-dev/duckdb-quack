@@ -49,6 +49,8 @@ public:
 	}
 	shared_ptr<QuackSchemaSet> OwnSnapshot();
 	void SetOwnSnapshot(shared_ptr<QuackSchemaSet> snapshot);
+	//! True the first time it is asked in this transaction: a lookup that missed may reload the catalog once
+	bool TakeMissReload();
 
 private:
 	QuackCatalog &quack_catalog;
@@ -60,6 +62,7 @@ private:
 	bool catalog_changed = false;
 	//! The catalog as this transaction sees it after its own change - empty until loaded
 	shared_ptr<QuackSchemaSet> own_snapshot;
+	bool reloaded_on_miss = false;
 };
 
 } // namespace duckdb
