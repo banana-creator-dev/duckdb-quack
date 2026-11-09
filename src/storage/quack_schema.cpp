@@ -161,7 +161,7 @@ optional_ptr<CatalogEntry> QuackSchemaCatalogEntry::LookupEntry(CatalogTransacti
 		// created on the server after the catalog was loaded? look again in a fresh one
 		auto &context = transaction.GetContext();
 		auto &quack_catalog = ParentCatalog().Cast<QuackCatalog>();
-		if (!quack_catalog.ReloadOnMiss(context)) {
+		if (QuackCatalog::SystemHoldsTable(context, entry_name) || !quack_catalog.ReloadOnMiss(context)) {
 			return nullptr;
 		}
 		auto fresh = quack_catalog.FindSchema(context, GetSchemaPath());
@@ -222,6 +222,7 @@ optional_ptr<CatalogEntry> QuackSchemaCatalogEntry::CreateTable(CatalogTransacti
 		return existing;
 	}
 	auto quack_entry = make_uniq<QuackTableCatalogEntry>(catalog, *this, create_table_info->Cast<CreateTableInfo>());
+	ParentCatalog().Cast<QuackCatalog>().KeepOid(*quack_entry);
 	return quack_transaction.Retain(std::move(quack_entry));
 }
 
@@ -246,6 +247,7 @@ optional_ptr<CatalogEntry> QuackSchemaCatalogEntry::CreateView(CatalogTransactio
 		return existing;
 	}
 	auto quack_entry = make_uniq<QuackViewCatalogEntry>(catalog, *this, info);
+	ParentCatalog().Cast<QuackCatalog>().KeepOid(*quack_entry);
 	return quack_transaction.Retain(std::move(quack_entry));
 }
 optional_ptr<CatalogEntry> QuackSchemaCatalogEntry::CreateSequence(CatalogTransaction transaction,
